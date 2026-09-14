@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#04050e" />
+    <meta name="description" content="Neon Snake —— 全向移动的霓虹贪吃蛇：加速冲刺、击杀爆料、AI 对手、缩圈竞技场与五种道具。" />
+    <title>Neon Snake · 全向霓虹贪吃蛇</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%233fd8ff' stroke-width='4'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%233fd8ff'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles/main.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game" aria-label="游戏画面"></canvas>
+
+      <div id="hud" class="hidden" aria-live="off">
+        <div class="hud-top">
+          <div class="stat stat-score">
+            <span class="label">分数</span>
+            <strong id="hud-score">0</strong>
+          </div>
+          <div class="stat">
+            <span class="label">质量</span>
+            <strong id="hud-mass">12</strong>
+          </div>
+          <div class="stat">
+            <span class="label">时间</span>
+            <strong id="hud-time">0:00</strong>
+          </div>
+          <div class="stat">
+            <span class="label">存活对手</span>
+            <strong id="hud-bots">0</strong>
+          </div>
+        </div>
+
+        <div class="hud-combo" id="hud-combo" hidden>
+          <div class="combo-mult" id="hud-combo-mult">×1</div>
+          <div class="combo-track"><div class="combo-fill" id="hud-combo-fill"></div></div>
+        </div>
+
+        <div class="hud-powerups" id="hud-powerups"></div>
+
+        <div class="hud-bottom">
+          <div class="minimap-wrap">
+            <canvas id="minimap" width="152" height="152" aria-label="小地图"></canvas>
+          </div>
+          <p class="hint" id="hud-hint">移动鼠标转向 · 按住左键加速</p>
+        </div>
+
+        <button id="btn-pause" class="icon-btn" type="button" aria-label="暂停">❙❙</button>
+        <button id="btn-boost" class="boost-btn hidden" type="button" aria-label="加速">加速</button>
+      </div>
+
+      <div id="overlays">
+        <section id="screen-menu" class="screen">
+          <div class="panel panel-wide">
+            <header class="brand">
+              <h1>NEON&nbsp;SNAKE</h1>
+              <p class="tagline">全向移动 · 击杀爆料 · 缩圈竞技场</p>
+            </header>
+
+            <div class="field">
+              <span class="field-label">难度</span>
+              <div class="seg" id="seg-difficulty" role="group" aria-label="难度">
+                <button type="button" data-value="easy">悠闲</button>
+                <button type="button" data-value="normal" class="active">标准</button>
+                <button type="button" data-value="hard">狂暴</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span class="field-label">主题</span>
+              <div class="seg" id="seg-theme" role="group" aria-label="主题"></div>
+            </div>
+
+            <div class="field">
+              <span class="field-label">画质</span>
+              <div class="seg" id="seg-quality" role="group" aria-label="画质">
+                <button type="button" data-value="high">高</button>
+                <button type="button" data-value="medium">中</button>
+                <button type="button" data-value="low">低</button>
+              </div>
+            </div>
+
+            <div class="field row">
+              <label class="switch">
+                <input type="checkbox" id="opt-sound" checked />
+                <span>音效</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="opt-motion" />
+                <span>减弱动效</span>
+              </label>
+            </div>
+
+            <div class="menu-actions">
+              <button id="btn-play" class="btn btn-primary" type="button">开始游戏</button>
+              <button id="btn-help" class="btn" type="button">玩法说明</button>
+              <button id="btn-achievements" class="btn" type="button">成就</button>
+            </div>
+
+            <footer class="meta">
+              <span>历史最高 <strong id="menu-best">0</strong></span>
+              <span class="sep">·</span>
+              <span>已解锁成就 <strong id="menu-ach">0/8</strong></span>
+            </footer>
+          </div>
+        </section>
+
+        <section id="screen-pause" class="screen hidden">
+          <div class="panel">
+            <h2>已暂停</h2>
+            <div class="menu-actions">
+              <button id="btn-resume" class="btn btn-primary" type="button">继续</button>
+              <button id="btn-restart" class="btn" type="button">重新开始</button>
+              <button id="btn-quit" class="btn btn-ghost" type="button">返回主菜单</button>
+            </div>
+            <p class="hint-center">按 Esc / P 继续 · 按 R 重开</p>
+          </div>
+        </section>
+
+        <section id="screen-over" class="screen hidden">
+          <div class="panel">
+            <h2 id="over-title">本局结束</h2>
+            <div class="over-grid">
+              <div><span class="label">分数</span><strong id="over-score">0</strong></div>
+              <div><span class="label">最高分</span><strong id="over-best">0</strong></div>
+              <div><span class="label">存活</span><strong id="over-time">0:00</strong></div>
+              <div><span class="label">击杀</span><strong id="over-kills">0</strong></div>
+              <div><span class="label">最大质量</span><strong id="over-mass">0</strong></div>
+              <div><span class="label">最高连击</span><strong id="over-combo">×1</strong></div>
+            </div>
+            <p class="over-cause" id="over-cause"></p>
+            <div class="menu-actions">
+              <button id="btn-again" class="btn btn-primary" type="button">再来一局</button>
+              <button id="btn-back" class="btn btn-ghost" type="button">返回主菜单</button>
+            </div>
+            <p class="hint-center">按 Enter 快速重开</p>
+          </div>
+        </section>
+
+        <section id="screen-help" class="screen hidden">
+          <div class="panel panel-wide">
+            <h2>玩法说明</h2>
+            <div class="help-grid">
+              <article>
+                <h3>移动</h3>
+                <p>鼠标移动 / 手指拖动 → 蛇头朝该点转向；A / D 或 ← / → → 相对左右转。转向有惯性，不是瞬转。</p>
+              </article>
+              <article>
+                <h3>加速冲刺</h3>
+                <p>按住左键或 Shift / 空格加速，速度 ×1.6，但每秒持续消耗质量；质量见底会自动松开。触屏双击并按住，或按住右下角「加速」。</p>
+              </article>
+              <article>
+                <h3>身体是武器</h3>
+                <p>任何蛇的头撞到别的蛇身即死，并爆出一地宝石。以小吃大靠的是走位，不是体型。</p>
+              </article>
+              <article>
+                <h3>连击</h3>
+                <p>2.6 秒内连续进食累积连击，每 3 层提升一级倍率，最高 ×8。</p>
+              </article>
+              <article>
+                <h3>道具</h3>
+                <p id="help-powerups"></p>
+              </article>
+              <article>
+                <h3>缩圈</h3>
+                <p>25 秒后竞技场开始收缩，出圈即死。边缘泛红时要立刻往中心走。</p>
+              </article>
+            </div>
+            <div class="menu-actions">
+              <button id="btn-help-back" class="btn btn-primary" type="button">明白了</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="screen-achievements" class="screen hidden">
+          <div class="panel panel-wide">
+            <h2>成就</h2>
+            <ul id="ach-list" class="ach-list"></ul>
+            <div class="menu-actions">
+              <button id="btn-ach-back" class="btn btn-primary" type="button">返回</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="toasts" aria-live="polite"></div>
+      <noscript>
+        <p style="color: #fff; padding: 24px">本游戏需要启用 JavaScript 才能运行。</p>
+      </noscript>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

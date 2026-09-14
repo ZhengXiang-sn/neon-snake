@@ -1,0 +1,23 @@
+# 本地产物与依赖，不进版本库（Vercel 从仓库构建，因此也不会被部署）
+node_modules/
+.artifacts/
+.vercel/
+
+# 本地自查/冒烟日志
+*.log
+syntax-*.txt
+test-out*.txt
+smoke-*.txt
+*-summary.txt
+filelist.txt
+variants.txt
+hygiene.txt
+env-probe.txt
+selfcheck.txt
+summary.txt
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,18 @@
+# Normalize line endings repo-wide.
+* text=auto eol=lf
+
+# Binary assets — never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# Linguist hints.
+*.js   text linguist-language=JavaScript
+*.mjs  text linguist-language=JavaScript
+*.css  text linguist-language=CSS
+*.html text linguist-language=HTML
