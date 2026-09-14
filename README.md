@@ -2,7 +2,12 @@
 
 一个**零依赖、零构建**的浏览器贪吃蛇游戏：原生 ES Modules + Canvas 2D，`git clone` 之后双击 `index.html` 就能玩。为"Vibe Coding 部署课"的部署作业而做，用它替换了课件里的番茄钟。
 
-> 在线地址：部署完成后填这里（`https://xxx.vercel.app`）
+> 🎮 **在线试玩**：<https://neon-snake-kappa.vercel.app>
+> 📦 **源码仓库**：<https://github.com/ZhengXiang-sn/neon-snake>
+
+> 备用域名：<https://neon-snake-zheng-xiang.vercel.app>（同一份生产部署的别名）
+>
+> 部署方式：Vercel Framework Preset = **Other**，无构建命令、无输出目录，直接托管静态文件。
 
 ![游戏画面](docs/screenshots/smoke-gameplay.png)
 
@@ -72,10 +77,15 @@ npm run verify   # check + test
 
 ## 部署
 
+纯静态站点，无需构建命令、无需输出目录，Framework Preset 选 **Other**。`vercel.json` 只声明了 `cleanUrls`，其余走默认。
+
 ```bash
-# Vercel：纯静态站点，无需构建命令、无需输出目录
+# 首次
 vercel --prod
+# 关联好仓库后，之后每次推送 main 也可以直接在 Vercel 上触发重新部署
 ```
+
+本次线上地址：<https://neon-snake-kappa.vercel.app>（生产别名，已指向 `main` 的构建产物）
 
 ## 文档
 

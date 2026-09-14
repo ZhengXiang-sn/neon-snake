@@ -108,3 +108,19 @@ npm run smoke    连跑 5 次全绿：50 / 50，hardFail = 0，softFail = 0，�
 ```
 
 冒烟测试覆盖：启动无脚本错误 → 主菜单渲染 → 开始游戏 → 键盘转向/加速 → 触屏按下接管与拖动转向 → 鼠标交互 → Esc 暂停且世界冻结 → 恢复 → 切主题且强调色同步 → 回主菜单 → 吸引模式世界在推进 → 覆盖层 Esc/Enter 不穿透 → 等自然死亡验证结算链路 → 再来一局重置 → 画布确有内容 → 无未捕获异常。
+
+---
+
+## 第四轮：上线产物校验（非代码审计，属交付校验）
+
+本机出口为白名单代理，`*.vercel.app` 不可直连，因此不能"打开线上页面"来验收。改用 Vercel API 做等价校验：
+
+| 校验项 | 方法 | 结果 |
+| --- | --- | --- |
+| 部署状态 | `GET /v13/deployments/{id}` | `state=READY`，`target=production` |
+| 是否走了构建 | 同上 | `buildSkipped=False`、`builds=0`（纯静态，无构建步骤） |
+| 生产别名 | 同上 `alias` | `neon-snake-kappa.vercel.app`、`neon-snake-zheng-xiang.vercel.app` |
+| 文件完整性 | `GET /v6/deployments/{id}/files` 遍历树 | 50 个文件，无缺失、无多余 |
+| **内容一致性** | `GET /v7/deployments/{id}/files/{uid}` 取回 base64 → 与本地逐一比对 SHA-256 | **50/50 哈希全等** |
+
+结论：**线上 artifact 与本地"通过 check 0 失败 / 75 单测 / 5×50 端到端"的那棵树逐字节相同**。据此可判定上线产物正确；唯一未覆盖的是真人浏览器的目视确认（受本机出口限制）。

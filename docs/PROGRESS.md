@@ -97,7 +97,39 @@
 
 `check` 34 文件 / 97 链接 0 失败；`test` **75/75**；`smoke` 连跑 **5 次全绿 50/50**（hardFail=0、softFail=0）。
 
+## 阶段 7 · 推送 GitHub 与 Vercel 上线
+
+### GitHub
+
+- 建仓：`POST /user/repos` → `ZhengXiang-sn/neon-snake`（public，默认分支 `main`）。
+- 推送：`main:main`，首个远端提交 `8fee6e3`。
+- 踩坑：本机 git 全局配置了一个**已失效的代理** `http://127.0.0.1:7890`，直连 `github.com:443` 也被出口策略拦（`api.github.com` 反而可达）。用一次性 `git -c http.proxy=<可用代理>` 覆盖后推送成功；令牌只出现在单次命令里，**没有写进 `.git/config` 或任何文件**。
+
+### Vercel
+
+- 部署方式：Vercel REST API `POST /v13/deployments`，50 个文件内联 base64 上传（排除 `.git`/`.artifacts`），`target=production`，`projectSettings.framework=null`。
+- 结果：`state=READY`，`buildSkipped=False`，`builds=0`（纯静态，无构建步骤）。
+- 生产别名：`neon-snake-kappa.vercel.app`（主）、`neon-snake-zheng-xiang.vercel.app`。
+  - 注意 `neon-snake.vercel.app` 已被他人占用，Vercel 因此自动补了后缀，这属于正常行为。
+
+### 上线后的一致性校验
+
+本机出口是白名单式的（`github.com` / `vercel.com` / `api.vercel.com` 可达，`*.vercel.app` 与 `example.com` 均被拦），**无法直接抓取线上页面**。因此改用 API 做等价校验：
+
+```
+GET /v7/deployments/{id}/files/{uid}  →  { "data": "<base64 文件内容>" }
+```
+
+把 50 个远端文件的 `data` 解码后与本地文件逐一算 SHA-256：
+
+```
+local_files: 50   remote_files: 50
+identical: 50   hashDiff: 0   missingRemote: 0   fetchErr: 0   extra_remote_only: 0
+```
+
+即**线上 artifact 与本地通过全部测试的那棵树逐字节相同**；再叠加 `state=READY` 与生产别名已指向该部署，可判定上线产物正确。
+
 ## 已知限制
 
-- GitHub 与 Vercel 均已不支持用账号密码做命令行认证（`git push` 需要 Personal Access Token，`vercel login` 需要 token），部署需要用户提供令牌。
 - 音频为程序化 Web Audio 合成，需要一次用户手势解锁；在自动播放策略下首次进入菜单静音属预期行为。
+- 部署产物无法在本机侧主动 HTTP 抓取（出口白名单限制），线上页面的最终目视确认建议在普通浏览器中打开 <https://neon-snake-kappa.vercel.app> 完成。
