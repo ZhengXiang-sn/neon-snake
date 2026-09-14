@@ -1,7 +1,7 @@
 import { POWERUP_COLORS } from '../render/renderer.js'
 import { POWERUP_TYPES, POWERUP_INFO } from '../config.js'
 import { clamp, TAU } from '../core/math.js'
-import { formatTime } from '../core/format.js'
+import { formatTime, formatScore } from '../core/format.js'
 
 const MINIMAP_FPS_DIVIDER = 4
 
@@ -145,7 +145,7 @@ export function createHud(root) {
       const player = world.player
       if (world.score !== lastScore) {
         lastScore = world.score
-        el.score.textContent = String(world.score)
+        el.score.textContent = formatScore(world.score)
       }
       el.mass.textContent = String(Math.floor(player.mass))
       el.time.textContent = formatTime(world.elapsed)

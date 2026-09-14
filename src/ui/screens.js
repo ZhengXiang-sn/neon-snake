@@ -1,7 +1,7 @@
 import { THEME_LIST } from '../render/theme.js'
 import { ACHIEVEMENTS } from '../game/achievements.js'
 import { POWERUP_TYPES, POWERUP_INFO } from '../config.js'
-import { formatTime } from '../core/format.js'
+import { formatTime, formatScore } from '../core/format.js'
 
 /** 玩法说明中的道具条目直接由 POWERUP_INFO 生成，避免说明与实现各写一份文案。 */
 function powerupHelpText() {
@@ -133,7 +133,7 @@ export function createScreens(root, opts) {
     },
     renderAchievements,
     refreshMeta() {
-      $('#menu-best').textContent = String(opts.getBest())
+      $('#menu-best').textContent = formatScore(opts.getBest())
       $('#menu-ach').textContent = `${opts.getUnlocked().size}/${ACHIEVEMENTS.length}`
     },
     /** 设置被程序化修改（例如自适应降档）后同步 UI 选中态。 */
@@ -146,8 +146,8 @@ export function createScreens(root, opts) {
     },
     showGameOver({ score, best, isRecord, elapsed, kills, mass, combo, cause }) {
       $('#over-title').textContent = isRecord ? '新纪录！' : '本局结束'
-      $('#over-score').textContent = String(score)
-      $('#over-best').textContent = String(best)
+      $('#over-score').textContent = formatScore(score)
+      $('#over-best').textContent = formatScore(best)
       $('#over-time').textContent = formatTime(elapsed)
       $('#over-kills').textContent = String(kills)
       $('#over-mass').textContent = String(Math.floor(mass))

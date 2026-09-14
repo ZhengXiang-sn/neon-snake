@@ -63,7 +63,7 @@ src/
 
 ```bash
 npm run check    # 静态检查：语法 + 具名导入/导出链接（防止"少写一个 export"导致白屏）
-npm test         # 单元测试（73 个，覆盖纯逻辑层）
+npm test         # 单元测试（75 个，覆盖纯逻辑层）
 npm run smoke    # 端到端：用系统自带 Edge/Chrome 无头跑真实页面（50 项断言 + 截图）
 npm run verify   # check + test
 ```
@@ -81,7 +81,7 @@ vercel --prod
 
 - [`docs/RESEARCH.md`](docs/RESEARCH.md) —— 立项前的调研：竞品玩法拆解与 Canvas 性能结论
 - [`docs/DESIGN.md`](docs/DESIGN.md) —— 玩法规格（G-01…G-17）、世界模型、性能与测试计划
-- [`docs/AUDIT.md`](docs/AUDIT.md) —— 两轮独立上下文审计报告与修复清单
+- [`docs/AUDIT.md`](docs/AUDIT.md) —— 三轮审计报告（两轮独立上下文审计 + 一轮提交后稳定性复核）与修复清单
 - [`docs/PROGRESS.md`](docs/PROGRESS.md) —— 开发过程记录
 
 ## 许可

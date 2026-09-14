@@ -18,6 +18,7 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const PORT = 4189
 const CDP_PORT = 9333
 const SHOT_DIR = join(ROOT, 'docs', 'screenshots')
+const REPORT = join(ROOT, '.artifacts', 'smoke-report.json')
 const DEATH_WAIT_MS = 20000
 
 const BROWSER_CANDIDATES = [
@@ -217,6 +218,18 @@ async function main() {
       const r = await client.send('Page.captureScreenshot', { format: 'png' }, sessionId)
       await writeFile(join(SHOT_DIR, `${name}.png`), Buffer.from(r.data, 'base64'))
     }
+    // 游戏在 visibilitychange / window blur 时会自动暂停（切走标签页或点开
+    // 别的窗口时，不让蛇白白撞死）。无头环境里截图、失焦偶尔会触发它，
+    // 因此这里记录事件，便于把"断言失败"与"自动暂停竞态"区分开。
+    await evaluate(
+      `window.__visLog = []
+       window.__blurLog = []
+       document.addEventListener('visibilitychange', () => window.__visLog.push(Math.round(performance.now())))
+       window.addEventListener('blur', () => window.__blurLog.push(Math.round(performance.now())))
+       true`,
+    )
+    const visLog = () => evaluate(`JSON.stringify(window.__visLog)`)
+    const blurLog = async () => JSON.parse(await evaluate(`JSON.stringify(window.__blurLog)`))
 
     /**
      * 地形与食物都是随机生成的，玩家（全程无操作，只做定向探测）有可能在某一组
@@ -295,7 +308,13 @@ async function main() {
     check('玩家存活且初始质量正确', s.playerAlive && s.playerMass >= 12, `mass=${s.playerMass}`)
     check('竞技场处于初始半径', Math.abs(s.arenaRadius - 1900) < 1, `r=${s.arenaRadius}`)
     check('身体节点已生成', s.playerNodes > 1, `nodes=${s.playerNodes}`)
-    check('AI 对手数量符合难度预设', s.aliveBots === 4, `bots=${s.aliveBots}`)
+    // 断言的是"按难度预设生成了对手"，而不是"此刻恰好还活着 4 个"——
+    // 对手撞陨石后会延迟重生，用存活数做等值断言会随地形随机抖动。
+    check(
+      'AI 对手数量符合难度预设',
+      s.botTarget === 4 && s.aliveBots >= 1 && s.aliveBots <= s.botTarget,
+      `bots=${s.aliveBots}/${s.botTarget}`,
+    )
     check(
       '轨迹点数不超容量上限',
       s.pathPoints > 0 && s.pathPoints <= 3200,
@@ -407,8 +426,20 @@ async function main() {
       const stillFrozen = JSON.parse(await snapshot()).elapsed
       check('暂停期间世界停止推进', Math.abs(stillFrozen - frozen) < 1e-6, `${frozen} → ${stillFrozen}`)
       await evaluate(`document.getElementById('btn-resume').click()`)
-      await sleep(300)
-      check('可继续游戏', JSON.parse(await snapshot()).mode === 'playing')
+      // 断言的是"恢复机制"而不是"蛇还活着"：暂停会把世界冻在半空中，
+      // 如果它本来就在朝陨石/对手冲，恢复后几百毫秒内死亡是完全正常的
+      // （随机地形 → 直接断言 mode==='playing' 会偶发抖动）。
+      // 只要世界重新开始推进，就证明 onStep 已经解冻。
+      let resumed = ''
+      for (let k = 0; k < 30; k++) {
+        await sleep(30)
+        const st = JSON.parse(await snapshot())
+        if (st.mode !== 'paused' && st.elapsed > frozen) {
+          resumed = `mode=${st.mode} elapsed=${frozen}→${st.elapsed}`
+          break
+        }
+      }
+      check('可继续游戏（世界重新推进）', !!resumed, resumed || `mode 仍为 paused 或世界未推进 (vis=${await visLog()})`)
     } else {
       check('Esc 可暂停', false, `当前模式 ${paused.mode}（可能已死亡）`, true)
     }

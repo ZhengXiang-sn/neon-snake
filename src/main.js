@@ -481,6 +481,8 @@ window.__neonSnake = {
       isTouch: input.state.isTouch,
       pathPoints: world.player.path.count,
       aliveBots: world.aliveBots,
+      /** 难度预设的对手总数（配置常量，不随场上死亡/重生波动） */
+      botTarget: world.cfg.botCount,
       particleLimit: renderer.particles.limit,
       unlocked: Array.from(unlocked),
     }
