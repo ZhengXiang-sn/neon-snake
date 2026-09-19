@@ -233,6 +233,44 @@ crystal   73.8 [67~81]   943        0      ≤46        ≤121      ≤157
 
 这条链（系统偏好 → 设置 → 渲染器 → 场景层）在单元测试里**完全测不到**，而它恰恰是审计发现的 P1 缺陷所在 —— 又一次印证"端到端测试不可省"。
 
+## 阶段 9 · 第二轮上线（迭代版）
+
+迭代版的代码、测试、审计全部完成并验证通过后，重新推送与部署。这一轮在两处踩了新坑，都记下来：
+
+### 9.1 GitHub：`git push` 这次不通，改用 Git Data API
+
+- 直连网络本身是好的（`api.github.com` 返回 200、`github.com` 返回 200，均为 100~700ms）。真正的问题有两个：
+  1. 本机 git **全局配置里那个代理 `127.0.0.1:7890` 是死端口**，而环境里这次也没有可用的代理端口（上一轮的 `57506` 已不存在）；
+  2. 即便用 `-c http.proxy=` 把代理置空走直连，`git push` 仍在传输中途被切断：`send-pack: unexpected disconnect while reading sideband packet`。本次提交要传 4.11 MB（含 5 张 PNG），大概率是这条路径对大包不友好。
+- 于是改用 **GitHub Git Data API** 推送（脚本 `.artifacts/push-gh.mjs`，不入库）：以远端 `main` 的树为 `base_tree`，只覆写本次提交涉及的 29 个路径（新增/修改给 blob，删除给 `sha: null`），其余路径原样继承，最后 `PATCH /git/refs/heads/main`。
+
+**校验用的是 tree sha，而不是"逐文件比对"**：
+
+```
+远端 main 原指向  f817fd5…（与本地父提交一致，确认没有要覆盖别人的提交）
+远端新 tree.sha   3c2f4db543a36270a419d581995b029d94d39fcb
+本地 HEAD tree.sha 3c2f4db543a36270a419d581995b029d94d39fcb
+tree 一致          YES
+```
+
+树相同 ⇒ 远端**所有路径、模式、内容**与本地逐字节一致。这比"比对我自认为改动的那几个文件"更强：它覆盖整仓，改漏、改多、模式变化都会露出来。
+
+> 注意：**commit 对象的 sha 不必相等**。git 会把 `1789834608 +0800` 这类时间戳与偏移按**字面**写进 commit 对象，而 API 生成 commit 时的偏移写法不同，于是同样的 tree、message、parent 也会算出不同的 sha。**内容正确性的判据是 tree sha。**
+
+### 9.2 Vercel：部署与产物校验
+
+- `POST /v13/deployments`，57 个文件内联 base64（4.11 MB），`target=production`，`projectSettings.framework=null`。
+- 结果：`state=READY`、`builds=0`（纯静态，无构建步骤）、别名 `neon-snake-kappa.vercel.app` 与 `neon-snake-zheng-xiang.vercel.app`；项目级 `ssoProtection = null`（部署保护仍处于关闭状态）。
+- 产物校验：`GET /v6/deployments/{id}/files` 取树 + `GET /v7/.../files/{uid}` 取回 base64 → 与本地逐文件比 SHA-256：
+
+```
+local_files: 57   remote_files: 57
+identical: 57     hashDiff: 0     missingRemote: 0     remoteOnly: 0
+```
+
+> **踩坑（连续踩了两次）**：`GET /v6/deployments/{id}/files` 返回的是**一棵树**，最外层只有一个"合成根"节点 —— 这个名字与真实路径无关（本项目实测叫 `src`，但它的 `children` 里就躺着根目录的 `index.html`）。
+> 第一版脚本直接拿 `n.name` 当路径（只对上 6 个根目录文件）；第二版又把它当成真实目录前缀去拼（变成 `src/index.html`）。两次都得出"57 个文件全部远端缺失"的假警报。正确做法是**先下钻一层，再从合成根开始拼路径**。
+
 ## 已知限制
 
 - 音频为程序化 Web Audio 合成，需要一次用户手势解锁；在自动播放策略下首次进入菜单静音属预期行为。

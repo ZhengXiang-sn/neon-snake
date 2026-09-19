@@ -127,6 +127,9 @@ vercel --prod
 
 本次线上地址：<https://neon-snake-kappa.vercel.app>（生产别名，已指向 `main` 的构建产物）
 
+> 迭代版（四种生态 + 程序化场景）已重新部署并通过产物校验：线上 57 个文件与本地逐字节相同（SHA-256 全等），`builds=0`、`state=READY`。
+> 由于本机 `git push` 在大包传输时会被切断，这轮改用 GitHub Git Data API 推送，并用 **tree sha 相等**证明远端整棵树与本地一致 —— 细节见 [`docs/PROGRESS.md`](docs/PROGRESS.md) 阶段 9。
+
 ## 文档
 
 - [`docs/RESEARCH.md`](docs/RESEARCH.md) —— 立项前的调研：竞品玩法拆解与 Canvas 性能结论
