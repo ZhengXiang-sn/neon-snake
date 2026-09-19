@@ -1,4 +1,5 @@
 import { POWERUP_COLORS } from '../render/renderer.js'
+import { drawTerrainMini } from '../render/obstacles.js'
 import { POWERUP_TYPES, POWERUP_INFO } from '../config.js'
 import { clamp, TAU } from '../core/math.js'
 import { formatTime, formatScore } from '../core/format.js'
@@ -52,14 +53,23 @@ export function createHud(root) {
   }
   resizeMinimap()
 
-  function drawMinimap(world, theme) {
+  function drawMinimap(world, theme, camera, viewport) {
     const size = 152
     const c = mapCtx
     c.clearRect(0, 0, size, size)
     const R = world.arenaRadius
-    const scale = (size / 2 - 6) / Math.max(1, R)
+    const scale = (size / 2 - 6) / Math.max(1, world.cfg.arenaRadiusStart)
     const cx = size / 2
     const cy = size / 2
+
+    // 开局圈的参考轮廓：缩圈后仍能看到"原来有多大"，收缩感才成立
+    c.beginPath()
+    c.arc(cx, cy, world.cfg.arenaRadiusStart * scale, 0, TAU)
+    c.strokeStyle = theme.ring
+    c.globalAlpha = 0.16
+    c.lineWidth = 1
+    c.stroke()
+    c.globalAlpha = 1
 
     c.beginPath()
     c.arc(cx, cy, R * scale, 0, TAU)
@@ -71,12 +81,8 @@ export function createHud(root) {
     c.stroke()
     c.globalAlpha = 1
 
-    c.fillStyle = 'rgba(255,255,255,0.12)'
-    for (const o of world.obstacles) {
-      c.beginPath()
-      c.arc(cx + o.x * scale, cy + o.y * scale, Math.max(1, o.r * scale), 0, TAU)
-      c.fill()
-    }
+    // 地形：折线墙画成线段，多边形障碍画成实心块（与主画面同源）
+    drawTerrainMini(c, world, theme, cx, cy, scale)
 
     c.fillStyle = theme.food.common
     c.globalAlpha = 0.42
@@ -103,6 +109,19 @@ export function createHud(root) {
       c.beginPath()
       c.arc(cx + s.x * scale, cy + s.y * scale, 2.2, 0, TAU)
       c.fill()
+    }
+
+    // 视野框：知道自己正在看哪一块，小地图才真正可用于导航
+    if (camera && viewport && viewport.w > 0) {
+      const hw = (viewport.w / 2 / Math.max(0.001, camera.zoom)) * scale
+      const hh = (viewport.h / 2 / Math.max(0.001, camera.zoom)) * scale
+      const px = cx + camera.x * scale
+      const py = cy + camera.y * scale
+      c.strokeStyle = theme.ui.accent
+      c.globalAlpha = 0.3
+      c.lineWidth = 1
+      c.strokeRect(px - hw, py - hh, hw * 2, hh * 2)
+      c.globalAlpha = 1
     }
 
     const player = world.player
@@ -141,7 +160,7 @@ export function createHud(root) {
       r.setProperty('--accent-soft', theme.ui.accentSoft)
       r.setProperty('--danger', theme.ui.danger)
     },
-    update(world, theme) {
+    update(world, theme, camera, viewport) {
       const player = world.player
       if (world.score !== lastScore) {
         lastScore = world.score
@@ -180,7 +199,7 @@ export function createHud(root) {
       }
 
       frame++
-      if (frame % MINIMAP_FPS_DIVIDER === 0) drawMinimap(world, theme)
+      if (frame % MINIMAP_FPS_DIVIDER === 0) drawMinimap(world, theme, camera, viewport)
     },
   }
 }

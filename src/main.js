@@ -12,6 +12,7 @@ import { getTheme, THEME_LIST } from './render/theme.js'
 import { createHud } from './ui/hud.js'
 import { createScreens } from './ui/screens.js'
 import { clamp } from './core/math.js'
+import { createRng } from './core/rng.js'
 
 const KEY_TURN_RATE = 3.6
 /** 触屏转向的死区（CSS 像素）：手指几乎按在蛇身上时不改变朝向，避免抖动 */
@@ -68,10 +69,11 @@ const hud = createHud(root)
 renderer.setTheme(theme)
 hud.setTheme(theme)
 camera.reducedMotion = settings.reducedMotion
+renderer.setReducedMotion(settings.reducedMotion)
 renderer.particles.setEnabled(!settings.reducedMotion)
 if (settings.reducedMotion) document.documentElement.classList.add('reduced-motion')
 
-let world = new World(createGameConfig({ difficulty: settings.difficulty }))
+let world = new World(createGameConfig({ difficulty: settings.difficulty, biome: settings.theme }))
 let run = createRunStats()
 let mode = 'menu'
 let pendingDeathCause = null
@@ -99,6 +101,7 @@ const screens = createScreens(root, {
   },
   onMotionChange: (value) => {
     camera.reducedMotion = value
+    renderer.setReducedMotion(value)
     renderer.particles.setEnabled(!value)
     document.documentElement.classList.toggle('reduced-motion', value)
     persistSettings()
@@ -112,12 +115,43 @@ function persistSettings() {
   storage.set(CONFIG.storageKeys.settings, settings)
 }
 
+/**
+ * 装饰物按局重生：用世界种子派生独立的随机源，
+ * 保证"同一局的地形与装饰永远配套"，而不是每次重绘都跳一遍。
+ */
+function regenerateDecor() {
+  renderer.scenery.setTheme(theme)
+  renderer.scenery.scatterDecor(world, createRng((world.seed ?? 1) ^ 0x9e3779b9))
+}
+
+/**
+ * 切换生态。
+ *
+ * 主题不只是配色 —— 它同时决定地形布局算法（game/terrain.js）。所以切主题时
+ * 地形会**实时重构**，而不是等下一局：菜单里的吸引模式会立刻换成新生态，
+ * 游戏中也立刻生效（rebuildTerrain 会以每条蛇为中心清出一块安全区，
+ * 保证不会有人被新生成的陨石当场压死）。
+ */
 function applyTheme(id) {
   settings.theme = id
   theme = getTheme(id)
   renderer.setTheme(theme)
   hud.setTheme(theme)
   persistSettings()
+
+  // 同步写回配置：否则下一次 newGame() 会把生态回退成创建时的旧值
+  world.cfg.biome = id
+  world.rebuildTerrain(id)
+  regenerateDecor()
+
+  if (mode === 'playing') {
+    renderer.particles.ring(world.player.x, world.player.y, theme.ring, 46, 0.7)
+    renderer.particles.sparkle(world.player.x, world.player.y, theme.ring, 1.8)
+    camera.pulse('200,230,255', 0.16)
+    screens.toast(`生态重构 · ${theme.name}｜${theme.blurb}`, 2600)
+  } else if (mode === 'menu') {
+    screens.toast(`生态切换 · ${theme.name}`, 1400)
+  }
 }
 
 // ------------------------------------------------------------------ 输入
@@ -180,8 +214,9 @@ window.addEventListener('keydown', () => audio.unlock(), { once: true })
 
 function startRun() {
   audio.unlock()
-  world = new World(createGameConfig({ difficulty: settings.difficulty }))
+  world = new World(createGameConfig({ difficulty: settings.difficulty, biome: settings.theme }))
   world.newGame()
+  regenerateDecor()
   run = createRunStats()
   pendingDeathCause = null
   wasBoosting = false
@@ -198,7 +233,7 @@ function startRun() {
   input.reset()
   loop.setPaused(false)
   loop.start()
-  screens.toast('开始！吃掉食物，撞死对手', 2000)
+  screens.toast(`${theme.name} · ${theme.blurb}`, 2400)
 }
 
 function pause() {
@@ -270,6 +305,7 @@ function endRun(cause) {
 function startAttract() {
   world.newGame()
   if (!world.player.ai) world.player.ai = createBrain(world.cfg, world.rng)
+  regenerateDecor()
   attractStarted = true
 }
 
@@ -364,6 +400,13 @@ function handleWorldEvents(silent = false) {
         }
         break
       }
+      case 'terrainEaten': {
+        // 缩圈把外圈地形摧毁了：在消失处扬起一小撮尘埃。
+        // 一帧只发一个事件（一堵墙有十几个节点），所以这里不需要限流。
+        renderer.particles.ring(ev.x, ev.y, theme.obstacle.edge, Math.max(12, ev.r * 0.6), 0.45)
+        if (silent) break
+        break
+      }
       default:
         break
     }
@@ -418,11 +461,11 @@ function onStep(dt) {
 }
 
 function onRender(_alpha, delta) {
-  // 暂停时把 delta 归零：世界与相机一起冻结，而不是相机继续偷偷追上蛇头
+  // 暂停时把 delta 归零：世界、相机与空气粒子一起冻结，而不是相机继续偷偷追上蛇头
   const live = mode === 'playing' ? delta : 0
   camera.update(live, world.player, renderer.viewport)
-  renderer.render(world, camera, performance.now() / 1000)
-  if (mode === 'playing' || mode === 'paused') hud.update(world, theme)
+  renderer.render(world, camera, performance.now() / 1000, live)
+  if (mode === 'playing' || mode === 'paused') hud.update(world, theme, camera, renderer.viewport)
 
   qualityChecked++
   if (qualityChecked % 45 === 0) maybeDowngrade()
@@ -456,13 +499,15 @@ const loop = createLoop({
  * 刻意不暴露任何可写入口，避免被当作作弊通道。
  */
 window.__neonSnake = {
-  version: '1.1.0',
+  version: '1.2.0',
   snapshot() {
     return {
       mode,
       screen: screens.activeScreen,
       difficulty: settings.difficulty,
       theme: settings.theme,
+      /** 本局地形生态（与 theme 同源，单独暴露便于断言"切的确实是地形"） */
+      biome: world.biome,
       quality: settings.quality,
       sound: settings.sound,
       reducedMotion: settings.reducedMotion,
@@ -470,6 +515,13 @@ window.__neonSnake = {
       best,
       elapsed: world.elapsed,
       arenaRadius: world.arenaRadius,
+      arenaRadiusStart: world.cfg.arenaRadiusStart,
+      arenaRadiusMin: world.cfg.arenaRadiusMin,
+      terrainEaten: world.terrainEaten,
+      obstacleCount: world.obstacles.length,
+      decorCount: renderer.scenery.decorCount,
+      decorDrawn: renderer.scenery.decorDrawn,
+      ambientCount: renderer.scenery.ambientCount,
       playerAlive: world.player.alive,
       playerMass: world.player.mass,
       playerNodes: world.player.nodeCount,

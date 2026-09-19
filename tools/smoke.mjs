@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
+import { THEME_LIST } from '../src/render/theme.js'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const PORT = 4189
@@ -285,9 +286,10 @@ async function main() {
       '难度/主题/画质选择器完整',
       await evaluate(
         `document.querySelectorAll('#seg-difficulty button').length === 3 &&
-         document.querySelectorAll('#seg-theme button').length === 3 &&
+         document.querySelectorAll('#seg-theme button').length === ${THEME_LIST.length} &&
          document.querySelectorAll('#seg-quality button').length === 3`,
       ),
+      `theme 按钮应为 ${THEME_LIST.length} 个`,
     )
     check(
       'CSS 已生效',
@@ -306,8 +308,11 @@ async function main() {
     check('主菜单已隐藏', await evaluate(`document.getElementById('screen-menu').classList.contains('hidden')`))
     check('游戏时钟在推进', s.elapsed > 0.6, `elapsed=${s.elapsed}`)
     check('玩家存活且初始质量正确', s.playerAlive && s.playerMass >= 12, `mass=${s.playerMass}`)
-    check('竞技场处于初始半径', Math.abs(s.arenaRadius - 1900) < 1, `r=${s.arenaRadius}`)
+    check('竞技场处于初始半径', Math.abs(s.arenaRadius - s.arenaRadiusStart) < 1, `r=${s.arenaRadius}/${s.arenaRadiusStart}`)
     check('身体节点已生成', s.playerNodes > 1, `nodes=${s.playerNodes}`)
+    check('本局生态与所选主题一致', s.biome === s.theme, `biome=${s.biome} theme=${s.theme}`)
+    check('开局地形已生成', s.obstacleCount >= 24, `obstacles=${s.obstacleCount}`)
+    check('场景装饰物已生成', s.decorCount > 0, `decor=${s.decorCount}`)
     // 断言的是"按难度预设生成了对手"，而不是"此刻恰好还活着 4 个"——
     // 对手撞陨石后会延迟重生，用存活数做等值断言会随地形随机抖动。
     check(
@@ -444,15 +449,70 @@ async function main() {
       check('Esc 可暂停', false, `当前模式 ${paused.mode}（可能已死亡）`, true)
     }
 
-    // ---- 6. 主题切换 ----
-    await evaluate(`document.querySelector('#seg-theme button[data-value="abyss"]').click()`)
-    await sleep(500)
-    check('切换主题写入状态', JSON.parse(await snapshot()).theme === 'abyss')
+    // ---- 6. 逐生态实机巡检 ----
+    // 用户的核心质疑是"三个地图只是换了颜色、没有本质区别"，
+    // 所以这里不能只断言"主题变量变了"，必须真的逐个换生态、采地形指纹与画面指纹，
+    // 证明四种生态是四张不同的地图。
+    //
+    // 巡检在**主菜单的吸引模式**下进行：世界由 AI 驱动、HUD 与覆盖层全部隐藏，
+    // 拍到的就是纯粹的生态景观；若在游戏中截图，结算面板会随时盖住画面。
+    const biomeProof = []
+    for (const t of THEME_LIST) {
+      await returnToMenu()
+      await evaluate(`document.querySelector('#seg-theme button[data-value="${t.id}"]').click()`)
+      await sleep(1100)
+      const st = JSON.parse(await snapshot())
+      const fingerprint = await evaluate(`(() => {
+        const c = document.getElementById('game')
+        const ctx = c.getContext('2d')
+        const d = ctx.getImageData(0, 0, c.width, c.height).data
+        let h = 2166136261
+        for (let i = 0; i < d.length; i += 4 * 613) {
+          h ^= d[i] + d[i + 1] * 3 + d[i + 2] * 7
+          h = Math.imul(h, 16777619) >>> 0
+        }
+        return h
+      })()`)
+      biomeProof.push({
+        id: t.id,
+        biome: st.biome,
+        theme: st.theme,
+        obstacles: st.obstacleCount,
+        decor: st.decorCount,
+        fingerprint,
+      })
+      await shot(`smoke-biome-${t.id}`)
+    }
+
     check(
-      '切换主题后强调色同步',
-      (await evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()`)) ===
-        '#2ff0b8',
+      '四种生态都能切换并进入',
+      biomeProof.every((b) => b.biome === b.id && b.theme === b.id),
+      biomeProof.map((b) => `${b.id}:${b.biome}`).join(' '),
     )
+    check(
+      '四种生态的地形各不相同（不是同一套地形换配色）',
+      new Set(biomeProof.map((b) => b.obstacles)).size === biomeProof.length,
+      biomeProof.map((b) => `${b.id}=${b.obstacles}`).join(' '),
+    )
+    check(
+      '四种生态的实机画面指纹互不相同',
+      new Set(biomeProof.map((b) => b.fingerprint)).size === biomeProof.length,
+      biomeProof.map((b) => `${b.id}=${b.fingerprint}`).join(' '),
+    )
+    check(
+      '每个生态都生成了场景装饰物',
+      biomeProof.every((b) => b.decor > 0),
+      biomeProof.map((b) => `${b.id}=${b.decor}`).join(' '),
+    )
+    check(
+      '切换生态后强调色同步',
+      (await evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()`)) ===
+        THEME_LIST[THEME_LIST.length - 1].ui.accent,
+    )
+
+    // ---- 6b. 回到游戏内拍一张 HUD 全景 ----
+    await ensurePlaying()
+    await sleep(400)
     await shot('smoke-gameplay')
 
     // ---- 7. 回主菜单 ----
@@ -541,6 +601,69 @@ async function main() {
     } else {
       check('在 20 秒内自然死亡并进入结算（soft）', false, '窗口内未死亡，跳过结算链路校验', true)
     }
+
+    // ---- 8. 系统级"减少动效"偏好真的接通了整条链 ----
+    // 只有端到端测得到：它考的是"系统偏好 → 主程序设置 → 渲染器 → 场景层"这条链。
+    // 早期版本把开关只写进了渲染器自身，空气粒子与装饰摇摆照旧在动。
+    // 放在最后执行：它会重新加载页面，避免影响前面所有断言的前提。
+    const ambientBefore = JSON.parse(await snapshot()).ambientCount
+    const clearSavedSettings = () =>
+      evaluate(
+        `Object.keys(localStorage).filter((k) => k.includes('settings')).forEach((k) => localStorage.removeItem(k)); true`,
+      )
+    await client.send(
+      'Emulation.setEmulatedMedia',
+      { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] },
+      sessionId,
+    )
+    // 必须先清掉已保存的设置：本作的设计是"用户显式选择 > 系统偏好作为首次默认值"，
+    // 上一段流程已经把设置写进 localStorage 了，不清掉就永远看不到系统偏好生效。
+    await clearSavedSettings()
+    await evaluate('location.reload()')
+    await sleep(2400)
+    check(
+      '浏览器层面确实报告了"减少动效"（排除是模拟本身没生效）',
+      await evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`),
+    )
+    // 画质可能在前面的长跑中被自动降级过，先固定回高档再考察装饰数量
+    await evaluate(`document.querySelector('#seg-quality button[data-value="high"]').click()`)
+    await sleep(600)
+    const rmOn = JSON.parse(await snapshot())
+    await shot('smoke-reduced-motion')
+    check(
+      '系统偏好被读取为"减少动效"',
+      rmOn.reducedMotion === true,
+      `reducedMotion=${rmOn.reducedMotion}`,
+    )
+    check(
+      '减少动效时空气粒子不再生成',
+      rmOn.ambientCount === 0,
+      `ambient ${ambientBefore} → ${rmOn.ambientCount}`,
+    )
+    check(
+      '减少动效关掉的是"动效"而不是"画面"（景物必须保留）',
+      rmOn.decorCount > 0 && rmOn.decorDrawn === rmOn.decorCount,
+      `decorDrawn=${rmOn.decorDrawn}/${rmOn.decorCount} quality=${rmOn.quality}`,
+    )
+    // 低画质必须真正减少绘制量（早期版本改画质不会重散布装饰，等于配了也不生效）
+    await evaluate(`document.querySelector('#seg-quality button[data-value="low"]').click()`)
+    await sleep(500)
+    const rmLow = JSON.parse(await snapshot())
+    check(
+      '低画质真的把装饰绘制量降下来',
+      rmLow.decorDrawn < rmOn.decorDrawn,
+      `high=${rmOn.decorDrawn} → low=${rmLow.decorDrawn}`,
+    )
+    await evaluate(`document.querySelector('#seg-quality button[data-value="high"]').click()`)
+    await sleep(400)
+
+    // 收尾：撤掉模拟偏好并清掉本次写入的设置，避免污染后续人工调试
+    await client.send(
+      'Emulation.setEmulatedMedia',
+      { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] },
+      sessionId,
+    )
+    await clearSavedSettings()
 
     check('无 console 报错与未捕获异常', errors.length === 0, errors.slice(0, 3).join(' | '))
   } catch (err) {

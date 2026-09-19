@@ -10,14 +10,51 @@ export const CONFIG = {
   maxSubSteps: 5,
 
   arena: {
-    radiusStart: 1900,
-    radiusMin: 760,
+    /**
+     * 竞技场半径。早期版本开局 1900、终局 760（面积比 6.3×），
+     * 而相机可视跨度只有 640 —— 玩家开局看到的不到全场的 1/17，
+     * 观感上"又空又大"，地形也只能挤在中心。现在缩小到 1500→840，
+     * 面积比 3.2×，缩圈依然有压迫感，但场地始终显得"有东西"。
+     */
+    radiusStart: 1500,
+    radiusMin: 840,
     /** 开局多少秒后开始收缩 */
     shrinkDelay: 25,
     /** 收缩持续秒数 */
     shrinkDuration: 180,
     /** 警戒带宽度：进入后开始预警 */
-    warnBand: 240,
+    warnBand: 220,
+  },
+
+  /**
+   * 地形生成参数。四个生态共用这套"分区"约定：
+   * 内圈（≤ arenaRadiusMin）的障碍物终局仍在，外圈的会被缩圈逐个吞噬。
+   */
+  terrain: {
+    /**
+     * 出生点净空半径。语义是"障碍物**中心**不得进入该半径"，
+     * 而不是"障碍物本体不得进入"：最内侧的障碍中心在 330 上下、
+     * 半径最大约 62，所以本体最近可以探到距原点 ~272 处。
+     * 实测四个生态的障碍物本体都不会盖住原点，出生点始终安全。
+     */
+    innerClear: 300,
+    /** 缩圈吞噬地形时的粒子强度 */
+    dissolveBurst: 0.9,
+  },
+
+  /**
+   * 场景装饰（不参与碰撞的纯视觉物件）与空气粒子。
+   * 数量按画质档缩放，避免低端机为了好看而掉帧。
+   */
+  scenery: {
+    /** 每个生态的装饰物数量（高画质） */
+    decorHigh: 132,
+    decorMedium: 70,
+    decorLow: 0,
+    /** 屏幕空间空气粒子数量（高画质） */
+    ambientHigh: 46,
+    ambientMedium: 24,
+    ambientLow: 0,
   },
 
   snake: {
@@ -55,13 +92,15 @@ export const CONFIG = {
   },
 
   food: {
-    /** 场上常驻普通食物数量 */
-    commonCount: 300,
+    /** 场上常驻普通食物数量（随竞技场缩小同步下调，保持单位面积密度稳定） */
+    commonCount: 240,
     commonValue: 1,
     commonRadius: 4.6,
-    goldCount: 14,
+    goldCount: 12,
     goldValue: 6,
     goldRadius: 7.4,
+    /** 食物落点避开障碍物的重试次数 */
+    placeTries: 6,
     /** 宝石掉落时"每个球承载的价值"基准，仅用于决定球数与球径 */
     gemValuePerOrb: 5.5,
     gemRadius: 9,
@@ -186,11 +225,13 @@ export const SNAKE_COLORS = [
  * 生成"扁平运行时配置"：把嵌套的 CONFIG 与难度预设摊平成一维，
  * 供 game/ 下的纯逻辑模块直接消费（避免各模块到处写 cfg.snake.xxx）。
  */
-export function createGameConfig({ difficulty = 'normal' } = {}) {
+export function createGameConfig({ difficulty = 'normal', biome = 'neon' } = {}) {
   const d = DIFFICULTY[difficulty] ?? DIFFICULTY.normal
   const s = CONFIG.snake
   return {
     difficulty: d,
+    /** 本局生态 id；地形生成按它选布局算法 */
+    biome,
     fixedStep: CONFIG.fixedStep,
     maxSubSteps: CONFIG.maxSubSteps,
 
@@ -230,6 +271,9 @@ export function createGameConfig({ difficulty = 'normal' } = {}) {
     arenaShrinkDuration: CONFIG.arena.shrinkDuration * d.shrinkMult,
     arenaWarnBand: CONFIG.arena.warnBand,
 
+    terrainInnerClear: CONFIG.terrain.innerClear,
+    terrainDissolveBurst: CONFIG.terrain.dissolveBurst,
+
     foodCommonCount: CONFIG.food.commonCount,
     foodCommonValue: CONFIG.food.commonValue,
     foodCommonRadius: CONFIG.food.commonRadius,
@@ -238,6 +282,7 @@ export function createGameConfig({ difficulty = 'normal' } = {}) {
     foodGoldRadius: CONFIG.food.goldRadius,
     foodGemValuePerOrb: CONFIG.food.gemValuePerOrb,
     foodGemRadius: CONFIG.food.gemRadius,
+    foodPlaceTries: CONFIG.food.placeTries,
     foodMagnetRadius: CONFIG.food.magnetRadius,
     foodMagnetSpeed: CONFIG.food.magnetSpeed,
 

@@ -15,7 +15,12 @@ export function createCamera() {
     y: 0,
     zoom: 1,
     flash: 0,
-    flashColor: '255,255,255',
+    /**
+     * 已是可直接赋给 `fillStyle` 的 CSS 颜色。
+     * 早期版本这里存的是裸三元组 `'255,255,255'`，渲染层每帧拼一次 `rgba(...)` 字符串，
+     * 与"热路径零分配"冲突。现在合成只发生在 `pulse()` 被调用的那一瞬（每次触发一次）。
+     */
+    flashColor: 'rgb(255,255,255)',
     shakeTime: 0,
     shakeDuration: 1,
     shakeMag: 0,
@@ -55,8 +60,12 @@ export function createCamera() {
       }
     },
 
+    /**
+     * 触发一次全屏闪光。
+     * @param {string} color 逗号分隔的 RGB 三元组，如 `'255,80,110'`
+     */
     pulse(color, amount = 0.35) {
-      this.flashColor = color
+      this.flashColor = `rgb(${color})`
       this.flash = Math.min(1, this.flash + amount)
     },
 

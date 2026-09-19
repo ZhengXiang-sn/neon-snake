@@ -8,6 +8,11 @@ function powerupHelpText() {
   return POWERUP_TYPES.map((t) => POWERUP_INFO[t]?.desc).filter(Boolean).join('；') + '。'
 }
 
+/** 生态说明同样由主题表生成：布局特征写在 theme.blurb 里，不重复维护。 */
+function biomeHelpText() {
+  return THEME_LIST.map((t) => `${t.name}（${t.blurb}）`).join('；') + '。在菜单里切换生态会立即重构地形。'
+}
+
 /**
  * 覆盖层与设置面板。所有交互元素都是原生 button/input，
  * 天然支持键盘 Tab 导航与读屏。
@@ -72,6 +77,13 @@ export function createScreens(root, opts) {
   setDifficulty(settings.difficulty)
   setQuality(settings.quality)
   setTheme(settings.theme)
+
+  /** 生态简介跟着选中项走，让"选了哪一个、它是什么地图"一眼可见。 */
+  function syncBlurb() {
+    const el = $('#theme-blurb')
+    if (el) el.textContent = THEME_LIST.find((t) => t.id === settings.theme)?.blurb ?? ''
+  }
+  syncBlurb()
 
   const soundBox = $('#opt-sound')
   const motionBox = $('#opt-motion')

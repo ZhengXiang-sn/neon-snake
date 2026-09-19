@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#04050e" />
-    <meta name="description" content="Neon Snake —— 全向移动的霓虹贪吃蛇：加速冲刺、击杀爆料、AI 对手、缩圈竞技场与五种道具。" />
+    <meta name="description" content="Neon Snake —— 全向移动的霓虹贪吃蛇：四种生态地形、加速冲刺、击杀爆料、AI 对手、缩圈吞没地形与五种道具。" />
     <title>Neon Snake · 全向霓虹贪吃蛇</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%233fd8ff' stroke-width='4'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%233fd8ff'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="./styles/main.css" />
@@ -56,7 +56,7 @@
           <div class="panel panel-wide">
             <header class="brand">
               <h1>NEON&nbsp;SNAKE</h1>
-              <p class="tagline">全向移动 · 击杀爆料 · 缩圈竞技场</p>
+              <p class="tagline">四种生态 · 全向移动 · 缩圈吞没地形</p>
             </header>
 
             <div class="field">
@@ -69,8 +69,9 @@
             </div>
 
             <div class="field">
-              <span class="field-label">主题</span>
-              <div class="seg" id="seg-theme" role="group" aria-label="主题"></div>
+              <span class="field-label">生态</span>
+              <div class="seg" id="seg-theme" role="group" aria-label="生态"></div>
+              <p class="field-note" id="theme-blurb"></p>
             </div>
 
             <div class="field">
@@ -164,8 +165,12 @@
                 <p id="help-powerups"></p>
               </article>
               <article>
+                <h3>生态与地形</h3>
+                <p id="help-biomes"></p>
+              </article>
+              <article>
                 <h3>缩圈</h3>
-                <p>25 秒后竞技场开始收缩，出圈即死。边缘泛红时要立刻往中心走。</p>
+                <p>25 秒后竞技场开始收缩，出圈即死。边界扫过时，外圈地形会被整块吞噬 —— 陨石碎裂、峡谷崩塌，缩得越紧，能站的形状越不一样。边缘泛红时要立刻往中心走。</p>
               </article>
             </div>
             <div class="menu-actions">

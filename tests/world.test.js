@@ -1,12 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { World } from '../src/game/world.js'
+import { analyzeTerrain } from '../src/game/terrain.js'
 import { createGameConfig } from '../src/config.js'
 
 function newWorld(overrides = {}) {
   const cfg = createGameConfig(overrides)
   const world = new World(cfg)
-  world.newGame({ seed: 12345 })
+  world.newGame({ seed: 12345, biome: cfg.biome })
   return world
 }
 
@@ -31,7 +32,9 @@ test('newGame 建立完整且自洽的初始世界', () => {
   assert.equal(world.player.alive, true)
   assert.equal(world.snakes.length, 1 + world.cfg.botCount)
   assert.equal(world.arenaRadius, world.cfg.arenaRadiusStart)
-  assert.equal(world.obstacles.length, 22)
+  assert.ok(world.obstacles.length >= 24, `地形数量应足够，实际 ${world.obstacles.length}`)
+  assert.equal(world.biome, world.cfg.biome)
+  assert.equal(world.terrainEaten, 0)
   assert.equal(aliveFood(world, world.commonRange[0], world.commonRange[1]), world.cfg.foodCommonCount)
   assert.equal(aliveFood(world, world.goldRange[0], world.goldRange[1]), world.cfg.foodGoldCount)
   assert.equal(aliveFood(world, world.gemRange[0], world.gemRange[1]), 0)
@@ -41,21 +44,163 @@ test('newGame 建立完整且自洽的初始世界', () => {
   }
 })
 
-test('障碍物都落在最终竞技场之内，且彼此不重叠', () => {
+test('开局地形：出生点净空、不重叠、径向铺开（不是中心一坨）', () => {
   const world = newWorld()
-  const limit = world.cfg.arenaRadiusMin
-  for (const o of world.obstacles) {
-    assert.ok(Math.hypot(o.x, o.y) + o.r <= limit, '障碍物必须完全位于最小竞技场内')
-    assert.ok(o.verts.length >= 7)
+  const t = {
+    innerClear: world.cfg.terrainInnerClear,
+    arenaRadiusMin: world.cfg.arenaRadiusMin,
   }
-  for (let i = 0; i < world.obstacles.length; i++) {
-    for (let k = i + 1; k < world.obstacles.length; k++) {
-      const a = world.obstacles[i]
-      const b = world.obstacles[k]
-      const need = a.r + b.r
-      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= need * 0.9, '障碍物不应严重重叠')
+  const stat = analyzeTerrain(world.obstacles, t)
+  assert.equal(stat.inInnerDisk, 0, '出生点净空内不得有障碍物')
+  assert.equal(stat.overlap, 0, '不同结构之间不得重叠')
+  assert.ok(
+    stat.meanRadius > world.cfg.arenaRadiusStart * 0.45,
+    `地形重心过于靠中心：${stat.meanRadius.toFixed(0)}`,
+  )
+  assert.ok(stat.maxRadius > world.cfg.arenaRadiusStart * 0.6, '地形必须延伸到远离中心的位置')
+})
+
+test('食物不会生成在障碍物内部（看得见却吃不到）', () => {
+  const world = newWorld()
+  let inside = 0
+  for (let i = world.commonRange[0]; i < world.goldRange[1]; i++) {
+    const f = world.food[i]
+    if (!f.alive) continue
+    for (const o of world.obstacles) {
+      const dx = o.x - f.x
+      const dy = o.y - f.y
+      const rr = o.r + f.r
+      if (dx * dx + dy * dy < rr * rr) {
+        inside++
+        break
+      }
     }
   }
+  // 不允许任何一颗食物被石头埋住：内圈石头终局也不会溶解，
+  // 埋在里面就等于整局都吃不到。这是 `_foodSpot` 兜底扫描的存在理由。
+  assert.equal(inside, 0, `有 ${inside} 个食物落在障碍物内部`)
+})
+
+test('食物落点的兜底扫描：即使随机重试全部失败也不会埋进石头里', () => {
+  const world = newWorld()
+  // 把重试次数压到 1，强制每次都走"随机点被挡 → 环形扫描兜底"这条路径
+  world.cfg.foodPlaceTries = 1
+  let blockedSoFar = 0
+  for (let i = 0; i < 300; i++) {
+    const first = world._randomPointInArena(60)
+    if (world._blockedAt(first.x, first.y, 20)) blockedSoFar++
+    const p = world._foodSpot(60, 20)
+    assert.equal(world._blockedAt(p.x, p.y, 20), false, '兜底落点仍在障碍物内部')
+  }
+  // 这些种子下必然有相当比例的随机首点落在石头里，否则本测试没有真正覆盖兜底分支
+  assert.ok(blockedSoFar >= 20, `兜底分支覆盖不足：仅 ${blockedSoFar}/300 次随机首点被挡`)
+})
+
+test('缩圈过程中切换生态，不会在圈外凭空生成障碍物', () => {
+  const world = newWorld()
+  // 模拟"已经缩过一段圈"的局面
+  world.elapsed = world.cfg.arenaShrinkDelay + world.cfg.arenaShrinkDuration * 0.6
+  world._updateArena()
+  world._dissolveTerrain()
+  const R = world.arenaRadius
+  assert.ok(R < world.cfg.arenaRadiusStart, '前置条件：竞技场应已缩小')
+
+  world.rebuildTerrain('crystal')
+
+  // 新地形按"开局半径"生成，若不按当前半径清扫，圈外黑暗里会留下一批
+  // 障碍物，并在下一帧被缩圈一次性吞掉（视觉上是切换瞬间炸出一团粒子）。
+  for (const o of world.obstacles) {
+    const reach = o.kind === 'wall' ? o.reach : Math.hypot(o.x, o.y)
+    assert.ok(reach + o.r <= R + 1e-6, `切换后仍有障碍物落在当前圈外：${(reach + o.r).toFixed(0)} > ${R.toFixed(0)}`)
+  }
+  assert.equal(world.terrainEaten, 0, '换生态清场不应计入"被缩圈吞噬"的统计')
+})
+
+test('地形随机源与玩法随机源相互独立，且同一 (种子, 生态) 恒产出同一张图', () => {
+  // 1) 玩法随机源被消耗掉任意多之后，同种子的地形必须一模一样。
+  //    旧版两者共用一支 rng，改地形参数会静默改变 AI / 掉落 / 食物序列。
+  const a = newWorld({ seed: 20260919 })
+  const b = newWorld({ seed: 20260919 })
+  for (let i = 0; i < 500; i++) b.rng.next()
+  b._generateObstacles()
+  assert.equal(a.obstacles.length, b.obstacles.length)
+  for (let i = 0; i < a.obstacles.length; i++) {
+    assert.equal(a.obstacles[i].x, b.obstacles[i].x)
+    assert.equal(a.obstacles[i].y, b.obstacles[i].y)
+  }
+
+  // 2) 来回切换生态必须是可逆的：A→B→A 之后地形要回到和第一次 A 完全相同。
+  //    注意比较基准必须也是"重建过的 A" —— rebuildTerrain 会额外清掉蛇周围的
+  //    障碍物，而 newGame 不会，两者直接对比是不同前提。
+  const c = newWorld()
+  const home = c.biome
+  c.rebuildTerrain(home)
+  const first = c.obstacles.map((o) => `${o.x.toFixed(3)},${o.y.toFixed(3)}`).join('|')
+  c.rebuildTerrain('sunset')
+  c.rebuildTerrain(home)
+  const again = c.obstacles.map((o) => `${o.x.toFixed(3)},${o.y.toFixed(3)}`).join('|')
+  assert.equal(again, first, '切回原生态后地形应与首次生成完全一致')
+})
+
+test('缩圈会吞噬外圈地形，且墙体整道崩塌', () => {
+  const world = newWorld({ biome: 'sunset' })
+  const before = world.obstacles.length
+  assert.ok(world.obstacles.some((o) => o.kind === 'wall'), '峡谷生态测试需要墙体')
+
+  // 推进到缩圈结束
+  world.elapsed = world.cfg.arenaShrinkDelay + world.cfg.arenaShrinkDuration + 1
+  world._updateArena()
+  world._dissolveTerrain()
+  assert.ok(world.arenaRadius < world.cfg.arenaRadiusStart, '竞技场应已收缩')
+  assert.ok(world.terrainEaten > 0, '外圈地形应被吞噬')
+  assert.ok(world.obstacles.length < before, '剩余地形应变少')
+
+  // 剩下的墙体必须是完整的：step 从 0 连续到最后，不存在"挖掉中间几个"
+  const groups = new Map()
+  for (const o of world.obstacles) {
+    if (o.kind !== 'wall') continue
+    const arr = groups.get(o.group) ?? []
+    arr.push(o.step)
+    groups.set(o.group, arr)
+  }
+  for (const [, steps] of groups) {
+    steps.sort((a, b) => a - b)
+    for (let i = 0; i < steps.length; i++) assert.equal(steps[i], i, '墙体必须整体保留或整体移除')
+  }
+
+  // 所有幸存地形都必须完整落在当前圈内
+  for (const o of world.obstacles) {
+    const reach = o.kind === 'wall' ? o.reach : Math.hypot(o.x, o.y)
+    assert.ok(reach + o.r <= world.arenaRadius + 1e-6, '幸存地形不得越出竞技场')
+  }
+})
+
+test('生态热切换会以每条蛇为中心清场，不会把蛇直接埋进新地形', () => {
+  const world = newWorld()
+  // 把玩家挪到外圈，确保切换后那里本来会有新生成的障碍物
+  world.player.x = 700
+  world.player.y = 0
+  world.rebuildTerrain('crystal')
+
+  assert.equal(world.biome, 'crystal')
+  assert.ok(world.obstacles.length > 20, '切换后必须真的重建了地形')
+  for (const s of world.snakes) {
+    if (!s.alive) continue
+    for (const o of world.obstacles) {
+      const dx = o.x - s.x
+      const dy = o.y - s.y
+      const rr = o.r + s.radius + 4
+      assert.ok(dx * dx + dy * dy > rr * rr, '蛇身周围必须被清空')
+    }
+  }
+})
+
+test('切换生态后 newGame 仍然使用新生态（不会回退成旧值）', () => {
+  const world = newWorld()
+  world.cfg.biome = 'abyss'
+  world.rebuildTerrain('abyss')
+  world.newGame({ seed: 999 })
+  assert.equal(world.biome, 'abyss')
 })
 
 test('step 推进时间并让玩家沿朝向移动', () => {

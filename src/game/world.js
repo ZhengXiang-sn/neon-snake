@@ -1,6 +1,7 @@
 import { Snake } from './snake.js'
 import { createBrain, updateBrain } from './ai.js'
 import { createGrid, circlesOverlap } from './collision.js'
+import { generateTerrain } from './terrain.js'
 import { createGameConfig, POWERUP_TYPES, SNAKE_COLORS } from '../config.js'
 import { clamp, normalize } from '../core/math.js'
 import { createRng, randomSeed } from '../core/rng.js'
@@ -13,6 +14,23 @@ const MAX_EVENTS = 64
 /** 减速力场半径与强度 */
 const SLOW_FIELD_RADIUS = 360
 const SLOW_FIELD_FACTOR = 0.5
+
+/** `_sweepTerrainOutside` 的复用返回值，避免每帧分配对象。 */
+const SWEEP = { removed: 0, last: null }
+
+/**
+ * 生态 id → 稳定的 32 位散列（FNV-1a）。
+ * 用来给地形单独派生一支随机源，把"地形随机性"与"AI/掉落/食物随机性"彻底分开：
+ * 以后调地形的任何参数，都不会静默改变下游的随机序列。
+ */
+function biomeHash(id) {
+  let h = 2166136261
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
 
 export class World {
   constructor(cfg = createGameConfig()) {
@@ -28,6 +46,10 @@ export class World {
     this.kills = 0
     this.elapsed = 0
     this.arenaRadius = cfg.arenaRadiusStart
+    /** 当前生态 id，决定地形布局；由 newGame / rebuildTerrain 更新 */
+    this.biome = cfg.biome
+    /** 已被缩圈吞噬的障碍物累计数量（诊断与 HUD 用） */
+    this.terrainEaten = 0
     this.state = 'idle'
     this._hitRef = null
     this._hitSelf = false
@@ -92,12 +114,14 @@ export class World {
 
   // ---------------------------------------------------------------- 开局
 
-  newGame({ seed = randomSeed() } = {}) {
+  newGame({ seed = randomSeed(), biome = this.cfg.biome } = {}) {
     this.rng = createRng(seed)
     this.seed = seed
+    this.biome = biome
     this.elapsed = 0
     this.score = 0
     this.kills = 0
+    this.terrainEaten = 0
     this.arenaRadius = this.cfg.arenaRadiusStart
     this.state = 'playing'
     this.events.length = 0
@@ -143,7 +167,7 @@ export class World {
   _seedFoodRange(range, tier, radius, value) {
     for (let i = range[0]; i < range[1]; i++) {
       const f = this.food[i]
-      const p = this._randomPointInArena(60)
+      const p = this._foodSpot(60, radius)
       f.x = p.x
       f.y = p.y
       f.r = radius
@@ -156,41 +180,175 @@ export class World {
     }
   }
 
-  _generateObstacles() {
-    const rng = this.rng
-    const cfg = this.cfg
-    const minR = 340
-    const maxR = Math.max(minR + 120, cfg.arenaRadiusMin * 0.86)
-    const list = []
-    for (let i = 0; i < 22; i++) {
-      let x = 0
-      let y = 0
-      let r = 0
-      for (let attempt = 0; attempt < 40; attempt++) {
-        r = rng.range(26, 56)
-        const a = rng.angle()
-        const d = minR + Math.sqrt(rng.next()) * (maxR - minR)
-        x = Math.cos(a) * d
-        y = Math.sin(a) * d
-        let ok = true
-        for (let k = 0; k < list.length; k++) {
-          const o = list[k]
-          const need = o.r + r + 110
-          const dx = o.x - x
-          const dy = o.y - y
-          if (dx * dx + dy * dy < need * need) {
-            ok = false
-            break
-          }
-        }
-        if (ok) break
-      }
-      const verts = []
-      const n = rng.int(7, 11)
-      for (let k = 0; k < n; k++) verts.push(r * rng.range(0.76, 1.2))
-      list.push({ x, y, r, verts, spin: rng.range(-0.12, 0.12) })
+  /** 该点是否落在某个障碍物内（含 `radius` 与 8px 余量）。 */
+  _blockedAt(x, y, radius) {
+    const list = this.obstacles
+    for (let i = 0; i < list.length; i++) {
+      const o = list[i]
+      const dx = o.x - x
+      const dy = o.y - y
+      const rr = o.r + radius + 8
+      if (dx * dx + dy * dy < rr * rr) return true
     }
-    this.obstacles = list
+    return false
+  }
+
+  /**
+   * 食物落点：优先避开障碍物。
+   * 地形变密后，食物生成在陨石内部的概率明显上升——玩家看得见吃不到，
+   * 小地图上也显示为"卡在石头里的点"。
+   *
+   * 因此随机重试用尽后，改为**按同心环确定性扫描**一个真正空闲的落点，
+   * 而不是退回"最后一次被挡住的点"：内圈的石头终局也不会被缩圈溶解，
+   * 埋在里面的食物整局都吃不到（而开局的 240 颗普通食物只播种一次、不会重掷）。
+   */
+  _foodSpot(margin, radius) {
+    const tries = this.cfg.foodPlaceTries
+    let p = this._randomPointInArena(margin)
+    if (this.obstacles.length === 0) return p
+    for (let t = 1; t < tries; t++) {
+      if (!this._blockedAt(p.x, p.y, radius)) return p
+      p = this._randomPointInArena(margin)
+    }
+    if (!this._blockedAt(p.x, p.y, radius)) return p
+
+    const R = Math.max(80, this.arenaRadius - margin)
+    for (let ring = 1; ring <= 5; ring++) {
+      const d = (R * ring) / 5
+      const steps = Math.max(10, Math.round(d / 70))
+      for (let k = 0; k < steps; k++) {
+        const a = (k / steps) * Math.PI * 2
+        const x = Math.cos(a) * d
+        const y = Math.sin(a) * d
+        if (!this._blockedAt(x, y, radius)) return { x, y }
+      }
+    }
+    // 竞技场被完全塞满（理论上不会发生）：退回出生点净空区，那里按设计保证没有障碍
+    return { x: 0, y: 0 }
+  }
+
+  /**
+   * 生成地形。具体布局算法见 game/terrain.js —— 每个生态一套，
+   * 且障碍物铺满整片竞技场（含缩圈后才被吞噬的外圈），不再是中心一坨。
+   *
+   * 地形用**独立派生**的随机源 `(seed ^ hash(biome))`，有两个好处：
+   *  1. 与玩法随机源解耦 —— 改地形参数不会连带改变 AI 决策/掉落/食物序列；
+   *  2. 同一 (种子, 生态) 恒产出同一张图，来回切换生态不会"每切一次换一张脸"。
+   */
+  _generateObstacles() {
+    const rng = createRng((this.seed ^ biomeHash(this.biome)) >>> 0)
+    this.obstacles = generateTerrain(this.biome, rng, {
+      innerClear: this.cfg.terrainInnerClear,
+      arenaRadiusStart: this.cfg.arenaRadiusStart,
+      arenaRadiusMin: this.cfg.arenaRadiusMin,
+    })
+  }
+
+  /**
+   * 生态热切换：不重开本局，直接重建地形。
+   *
+   * 必须"清场"——否则玩家可能正好站在新生成的陨石里，切换生态等于秒杀自己。
+   * 因此重建后把所有蛇身附近的障碍物剔除（墙体整道剔除，避免只剩半截折线时
+   * 渲染出的胶囊与碰撞圆不再重合）；
+   * 同时还要**沿当前竞技场半径再扫一遍**：本局可能已经缩过圈，
+   * 而新地形是按开局半径生成的，若不清扫，圈外黑暗里会凭空多出一批障碍，
+   * 下一帧又被缩圈一次性吞掉 —— 表现为切换瞬间"圈外炸出一团溶解粒子"。
+   */
+  rebuildTerrain(biome, { pad = 130 } = {}) {
+    this.biome = biome
+    this._generateObstacles()
+    this._clearTerrainAroundSnakes(pad)
+    this._sweepTerrainOutside(this.arenaRadius)
+    this.terrainEaten = 0
+    this._emit({ type: 'biomeShift', biome })
+    return this
+  }
+
+  _nearSnake(x, y, r, pad) {
+    for (let i = 0; i < this.snakes.length; i++) {
+      const s = this.snakes[i]
+      if (!s.alive) continue
+      const reach = s.radius + r + pad
+      if (circlesOverlap(x, y, reach, s.x, s.y, 0)) return true
+      for (let k = 0; k < s.nodeCount; k += 2) {
+        const n = s.nodes[k]
+        if (circlesOverlap(x, y, reach, n.x, n.y, 0)) return true
+      }
+    }
+    return false
+  }
+
+  _clearTerrainAroundSnakes(pad) {
+    const list = this.obstacles
+    if (list.length === 0) return
+    const doomedGroups = new Set()
+    for (let i = 0; i < list.length; i++) {
+      const o = list[i]
+      if (o.kind === 'wall' && this._nearSnake(o.x, o.y, o.r, pad)) doomedGroups.add(o.group)
+    }
+    let write = 0
+    for (let i = 0; i < list.length; i++) {
+      const o = list[i]
+      if (o.kind === 'wall') {
+        if (doomedGroups.has(o.group)) continue
+      } else if (this._nearSnake(o.x, o.y, o.r, pad)) {
+        continue
+      }
+      list[write++] = o
+    }
+    list.length = write
+  }
+
+  /**
+   * 剔除所有"已经越出当前竞技场"的障碍物，返回被剔除的数量。
+   * `_dissolveTerrain`（缩圈吞没，要计数与发事件）与 `rebuildTerrain`
+   * （换生态清场，静默）共用同一套几何判定，避免两处判定漂移。
+   * 结果写进复用的 `SWEEP`，不分配对象。
+   */
+  _sweepTerrainOutside(R) {
+    const list = this.obstacles
+    SWEEP.removed = 0
+    SWEEP.last = null
+    if (list.length === 0) return SWEEP
+    let write = 0
+    for (let i = 0; i < list.length; i++) {
+      const o = list[i]
+      const reach = o.kind === 'wall' ? o.reach : Math.hypot(o.x, o.y)
+      if (reach + o.r > R) {
+        SWEEP.removed++
+        SWEEP.last = o
+        continue
+      }
+      list[write++] = o
+    }
+    list.length = write
+    return SWEEP
+  }
+
+  /**
+   * 缩圈吞噬地形：径向外侧的障碍物在边界扫过时被摧毁。
+   *
+   * 这一步同时解决三个问题：
+   *  - 视觉上，外圈障碍不会"漂"在圈外的黑暗里；
+   *  - 数值上，避免缩圈把障碍密度按面积比例顶到 3 倍以上，形成无法走位的死亡陷阱；
+   *  - 结构上，**墙体整道崩塌**：只要有一个节点出圈，整道墙一起消失。
+   *    留下半截墙不只是难看 —— 一条跨越竞技场的弦会把圆形场地切成
+   *    互不连通的两块，直接把玩家困死。
+   */
+  _dissolveTerrain() {
+    const res = this._sweepTerrainOutside(this.arenaRadius)
+    if (res.removed === 0) return
+    this.terrainEaten += res.removed
+    // 一帧只发一个事件：一堵墙有十几个节点，逐节点发事件会把事件队列冲垮
+    if (res.last) {
+      this._emit({
+        type: 'terrainEaten',
+        x: res.last.x,
+        y: res.last.y,
+        r: res.last.r,
+        count: res.removed,
+      })
+    }
   }
 
   _randomPointInArena(margin = 60) {
@@ -334,6 +492,7 @@ export class World {
     if (this.state !== 'playing') return
     this.elapsed += dt
     this._updateArena()
+    this._dissolveTerrain()
 
     const playerSlow = this.player.alive && this.player.effects.slow > 0
 
@@ -551,7 +710,7 @@ export class World {
         continue
       }
       if (f.respawnAt > 0 && f.respawnAt <= this.elapsed) {
-        const p = this._randomPointInArena(60)
+        const p = this._foodSpot(60, f.r)
         f.x = p.x
         f.y = p.y
         f.alive = true
@@ -616,7 +775,7 @@ export class World {
         }
       }
       if (free) {
-        const spot = this._randomPointInArena(140)
+        const spot = this._foodSpot(140, cfg.powerupRadius)
         free.x = spot.x
         free.y = spot.y
         free.type = this.rng.pick(POWERUP_TYPES)
